@@ -1,0 +1,520 @@
+---
+title: "Final Project"
+author: "Fomba Kassoh & Souleymane Doumbia"
+date: "2023-12-10"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# INTRODUCTION
+
+This project delves into the analysis of audiobooks as follow:
+
+## Context of data Collection
+Acquired data through web scraping using the following frameworks:
+* **Selenium:** The data scrapped by Selenium is dirtier on purpose to:
+  1. Demostrate data tidying.
+  2. Data visualization.
+  3. Exploratory data analysis.
+* **Scraper Spider:** The Spider data is cleaner on purpose to:
+  1. Create a joint with the Selenium data
+  2. For sntiment analysis.
+
+
+## Post-acquisition
+The project follows the OSEMN framework and Hadley Wickham’s Grammar of Data Science. 
+  1. The data, initially scraped and saved as CSV and json files
+  2. The data is further processed in R for: 
+    * data tidying/cleaning, 
+    * parsing, and transformation, 
+    * preparing it for comprehensive analysis. 
+  3. Detailed exploratory and analytical work in R.
+
+
+```{r libraries}
+# Loading libraries
+library(readr)
+library(tidyr)
+library(dplyr)
+library(stringr)
+```
+
+# Overview of the data
+
+Below are the variables in the data. The data scraped by Scraper further has:
+  * categories
+  * genre
+  * reviews
+  
+```{r loading the data}
+
+audible_books <- read_csv("https://raw.githubusercontent.com/hawa1983/DATA607/main/audible_books.csv")
+
+glimpse(audible_books)
+```
+
+
+# Data Tydying
+
+## Parsing and Cleaning 'authors', 'narrators'
+
+Parse and cleaning the 'authors' and 'narrators' fields using:
+**str_replace_all to remove unwanted characters and extract the necessary information.**
+ 
+  1. Cleans up the 'authors' and 'narrators' columns.
+  2. Relocates the cleaned columns next to the originals.
+  3. Drops the original 'authors' and 'narrators' columns.
+  4. Renames the cleaned columns to 'authors' and 'narrators'.
+  5. Select affected columns for display only
+
+```{r data tydying}
+# Cleaning 'authors' and 'narrators', relocating them, dropping the original, and renaming the cleaned columns
+audible_books <- audible_books %>%
+  mutate(
+    authors_cleaned = str_replace_all(authors, "\\['|'\\]", ""),
+    narrators_cleaned = str_replace_all(narrators, "\\['|'\\]", "")
+  ) %>%
+  relocate(authors_cleaned, .after = authors) %>%
+  relocate(narrators_cleaned, .after = narrators) %>%
+  select(-authors, -narrators) %>%
+  rename(
+    authors = authors_cleaned,
+    narrators = narrators_cleaned
+  )
+
+audible_books %>%
+  select(title, authors, narrators) %>%
+  head()
+
+```
+
+## Extracting Numeric Data from 'length', 'rating', and 'no_of_ratings'
+
+We will tidy these columns as follows:
+  * Extract the numeric data from the 'length', 'rating', and 'no_of_ratings' columns. 
+  * We'll use str_extract to pull out the numbers, and for the 'rating'.
+  * We'll also remove the 'out of 5 stars' text.
+  * Select the affected columns for display only
+
+```{r Cleaning lenght, rating and no_of_ratings}
+library(dplyr)
+library(stringr)
+
+audible_books <- audible_books %>%
+  mutate(
+    # Extracting hours and convert to numeric, replacing NA with 0 if only minutes are present
+    length_hours = as.numeric(str_extract(length, "\\b\\d+\\b(?=\\s*hr)")) %>% replace_na(0),
+    # Extracting minutes and convert to numeric, replacing NA with 0 if only hours are present
+    length_minutes = as.numeric(str_extract(length, "\\b\\d+\\b(?=\\s*min)")) %>% replace_na(0),
+    # Calculating total length in minutes
+    total_length_minutes = (length_hours * 60) + length_minutes,
+    # Extracting numeric rating and number of ratings
+    rating_numeric = as.numeric(str_extract(rating, "\\b\\d+(\\.\\d+)?")),
+    no_of_ratings_numeric = as.numeric(str_extract(no_of_ratings, "\\b\\d+"))
+  ) %>%
+  select(-length_hours, -length_minutes) %>%
+  relocate(total_length_minutes, .after = length) %>%
+  relocate(rating_numeric, .after = rating) %>%
+  relocate(no_of_ratings_numeric, .after = no_of_ratings)
+
+audible_books %>%
+  select(length, total_length_minutes, rating, rating_numeric, no_of_ratings, no_of_ratings_numeric) %>%
+  head()
+```
+
+
+## Standardizing 'release_date' and 'language': 
+  * Extracts and converts the 'release_date' to a date format.
+  * Extracts the language name from the 'language' field.
+  * Relocates the standardized columns next to the originals.
+  * Drops the original 'release_date' and 'language' columns.
+  * Renames the standardized columns to 'release_date' and 'language'.
+  * Select the affected columns for display only
+
+```{r Standardizing release_date and language}
+# Standardizing 'release_date' and extracting just the language name from 'language', rearranging them, dropping the original, and renaming them
+audible_books <- audible_books %>%
+  mutate(
+    release_date_standardized = as.Date(str_extract(release_date, "\\d{2}-\\d{2}-\\d{2,4}"), format = "%m-%d-%y"),
+    language_standardized = str_replace(language, "Language: ", "")
+  ) %>%
+  relocate(release_date_standardized, .after = release_date) %>%
+  relocate(language_standardized, .after = language) %>%
+  select(-release_date, -language) %>%
+  rename(
+    release_date = release_date_standardized,
+    language = language_standardized
+  )
+
+audible_books %>%
+  head()
+
+```
+
+## Formatting Price Fields
+* The regular_price_numeric and sales_price_numeric columns are created by extracting the numeric values from         'regular_price' and 'sales_price'.
+* Create a sales_status column based on whether sales_price_numeric is NA or not.
+* Relocated next to their respective original columns.
+* Remove the original 'regular_price' and 'sales_price' from the dataframe.
+* Select the affected columns for display only
+
+
+```{r Formatting Price Fields}
+# Processing 'regular_price' and 'sales_price', create 'sales_status' column, rearrange, drop the original, and rename
+audible_books <- audible_books %>%
+  mutate(
+    regular_price_numeric = as.numeric(str_extract(regular_price, "\\d+\\.\\d+")),
+    sales_price_numeric = as.numeric(str_extract(sales_price, "\\d+\\.\\d+")),
+    sales_status = ifelse(is.na(sales_price_numeric), "not on sale", "on sale")
+  ) %>%
+  relocate(regular_price_numeric, .after = regular_price) %>%
+  relocate(sales_price_numeric, .after = sales_price) %>%
+  relocate(sales_status, .after = sales_price_numeric) %>%
+  select(-regular_price, -sales_price)
+
+audible_books %>%
+  select(regular_price_numeric, sales_price_numeric, sales_status) %>%
+  head()
+```
+
+# Audiobook Length Analysis
+The histogram of audiobook lengths shows:
+  * a concentration of audiobooks under 700 minutes, with a median of 532 minutes. 
+  * This indicates a user preference for audiobooks around 9 hours long, suitable for consuming in a day or a week. 
+  * The mean length is slightly higher at 579 minutes, hinting at longer audiobooks influencing the average. 
+  * With the longest audiobook at 2762 minutes, there's content for users who enjoy extensive listening. 
+  * The distribution suggests a varied catalog with a focus on moderate-length audiobooks.
+
+```{r}
+library(ggplot2)
+# Summary statistics for audiobook lengths
+length_summary <- summary(audible_books$total_length_minutes)
+length_summary
+
+# Histogram of audiobook lengths
+ggplot(audible_books, aes(x = total_length_minutes)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  labs(title = "Distribution of Audiobook Lengths", x = "Total Length (minutes)", y = "Frequency")
+```
+
+# Rating Distribution
+The density plot of audiobook ratings shows:
+  * a strong skew towards high ratings, with a peak at 5.0 indicating a large number of audiobooks receiving perfect scores.     * This concentration of high ratings suggests either a selection of high-quality titles or a tendency among users to rate audiobooks favorably. 
+  * The mean rating is 4.84, supporting this trend towards higher ratings. 
+  * The range is narrow, with the lowest rating at 4.5, showcasing overall positive reception. 
+  * The data indicates users of this audiobook platform are likely to encounter content that is well-received by others, which could be a strong selling point for the service.
+
+```{r Rating Distribution}
+# Summary statistics for audiobook lengths
+rating_summary <- summary(audible_books$rating_numeric)
+rating_summary
+
+rating_frequency <- audible_books %>% select (rating_numeric) %>% group_by(rating_numeric) %>% count()
+rating_frequency
+
+
+# Histogram or density plot of audiobook ratings
+ggplot(audible_books, aes(x = rating_numeric)) +
+ #geom_histogram(bins = 30, fill = "grey", color = "purple") +
+  geom_density(fill = "green", alpha = 0.7) +
+  labs(title = "Distribution of Audiobook Ratings", x = "Rating", y = "Density")
+```
+
+# Number of Rating Distribution
+The "Distribution of Number Of Rating" histogram, together with the R console's summary statistics, provides a concise visual and quantitative analysis of the audiobook ratings count in the dataset. 
+* The bulk of audiobooks receive fewer ratings, with frequency declining as the number of ratings increases, 
+* This points to a select few audiobooks attracting a high volume of ratings. 
+* The summary further details that the median is at 15, suggesting half of the audiobooks have 15 or fewer ratings
+* The mean is slightly elevated at 28.3 due to the influence of a few highly-rated audiobooks. 
+* This disparity between the mean and median indicates the skewed nature of the distribution. 
+* Additionally, the first and third quartiles stand at 11 and 25 ratings respectively, revealing that 25% of the audiobooks have fewer than 11 ratings, and 75% have fewer than 25. 
+* This insight reflects on the listeners' engagement, suggesting a concentration of popularity among a small number of titles and potentially highlighting a need for further promotion or time to accumulate ratings for the others. 
+
+```{r Number of rating per books}
+# Summary statistics for Number Of Rating
+number_ofRating_summary <- summary(audible_books$no_of_ratings_numeric)
+number_ofRating_summary
+
+frequency <- audible_books %>% select(no_of_ratings_numeric) %>% group_by(no_of_ratings_numeric) %>% count()
+frequency
+
+# Histogram of Number Of Rating
+ggplot(audible_books, aes(x = no_of_ratings_numeric)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  labs(title = "Distribution of Number Of Rating", x = "Total Number Of Rating", y = "Frequency")
+```
+
+
+# Relationship Between Ratings and Length
+The scatter plot depicts "Audiobook Ratings vs. Total Length" 
+* The correlation coefficient of -0.1491 indicates a minor negative relationship between an audiobook's length and its ratings
+* This relationship is not strong. This trend suggests that longer audiobooks may receive marginally lower ratings on average, but the correlation is weak, which points to other factors likely playing a more pivotal role in determining ratings.
+
+In the context of the project, this finding is informative because it highlights that while the length of an audiobook might have a slight impact on its rating, it is not a substantial influence. This nuance is important for stakeholders who might consider the length of audiobooks as a factor in production or marketing strategies. It emphasizes that content quality, genre, narrator performance, or other elements might be more critical in affecting listener satisfaction and ratings. The project's analysis illustrates that data-driven decisions in the audiobook industry cannot rely on length alone but should consider a broader range of factors to understand and predict listener preferences and ratings effectively.
+
+```{r Rating vs Length}
+# Correlation analysis between ratings and total length
+correlation_length_rating <- cor(audible_books$rating_numeric, audible_books$total_length_minutes, use = "complete.obs")
+correlation_length_rating
+
+# Scatter plot of ratings vs total length
+ggplot(audible_books, aes(x = total_length_minutes, y = rating_numeric)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(title = "Audiobook Ratings vs. Total Length", x = "Total Length (minutes)", y = "Rating")
+```
+
+
+# Relationship Between Ratings and Number of Ratings
+Analysis of the audiobook dataset reveals a landscape where:
+* a few titles receive a high number of ratings, but most accumulate fewer engagements.
+* This trend is supported by the scatterplot "Audiobook Ratings vs. Number of Ratings," which, with a slight negative correlation, suggests that higher-rated audiobooks do not always equate to higher engagement. 
+* These insights are essential for understanding the distribution of listener engagement across the audiobook collection, highlighting potential areas for strategic marketing and positioning within the audiobook market.
+
+```{r Rating vs Number of Rating}
+# Correlation analysis between ratings and number of ratings
+correlation_result <- cor(audible_books$rating_numeric, audible_books$no_of_ratings_numeric, use = "complete.obs")
+correlation_result
+
+# Scatter plot of ratings vs number of ratings
+ggplot(audible_books, aes(x = rating_numeric, y = no_of_ratings_numeric)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(title = "Audiobook Ratings vs. Number of Ratings", x = "Rating", y = "Number of Rating")
+```
+
+# Author and Narrator Popularity Analysis
+
+* The authors' chart presents, with the top authors receiving a high number of ratings, which could be reflective of their popularity, prolific output, or the success of specific titles
+* In the narrators'chart, a similar trend, we see a clear hierarchy, with the most popular narrators receiving significantly more ratings than others, which indicates a high listener engagement and possibly a strong fan base
+* These analyses serve as a powerful tool for understanding market trends, guiding marketing strategies, and possibly for recommending narrators and authors to listeners based on popular appeal. 
+* The insights from these charts suggest that certain narrators and authors have a significant influence on the audiobook market's dynamics, potentially driving sales and popularity of the titles they are associated with.
+
+```{r Author and Narrator Popularity Analysis}
+# Calculate average ratings and number of ratings by author
+author_popularity <- audible_books %>%
+  group_by(authors) %>%
+  summarise(
+    average_rating = mean(rating_numeric, na.rm = TRUE),
+    total_ratings = sum(no_of_ratings_numeric, na.rm = TRUE)
+  ) %>%
+  arrange(desc(total_ratings))
+
+# Top 10 authors by total ratings
+top_authors <- head(author_popularity, 10)
+
+ggplot(top_authors, aes(x = reorder(authors, total_ratings), y = total_ratings)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() + # Flips the axes to make labels readable
+  labs(x = "Authors", y = "Total Number of Ratings", title = "Top 10 Authors by Number of Ratings") +
+  theme_minimal()
+
+
+
+
+# Calculate average ratings and number of ratings by narrator
+narrator_popularity <- audible_books %>%
+  group_by(narrators) %>%
+  summarise(
+    average_rating = mean(rating_numeric, na.rm = TRUE),
+    total_ratings = sum(no_of_ratings_numeric, na.rm = TRUE)
+  ) %>%
+  arrange(desc(total_ratings))
+
+# Top 10 narrators by total ratings
+top_narrators <- head(narrator_popularity, 10)
+
+ggplot(top_narrators, aes(x = reorder(narrators, total_ratings), y = total_ratings)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  coord_flip() +
+  labs(x = "Narrators", y = "Total Number of Ratings", title = "Top 10 Narrators by Number of Ratings") +
+  theme_minimal()
+```
+
+# Sentiment Analysys
+
+We used the reviews from the scraped data using Scrapy for sentiment analysis
+
+
+```{r}
+library(syuzhet)
+library(dplyr)
+library(readr)
+
+# Read the CSV file
+# Read the csv files into data frames
+reviews <- read.csv('https://raw.githubusercontent.com/hawa1983/DATA607_Final_project/main/audible.csv')
+# reviews <- read_csv("C:/Users/RemoteUser/spider_tutorial/spider_tutorial/audible.csv")
+
+# Perform sentiment analysis
+# Make sure to replace 'review_text' with the actual name of the column that contains the review texts
+reviews_sentiments <- reviews %>%
+  mutate(sentiment = get_sentiment(reviews, method = "afinn"))
+
+# Select the necessary columns
+reviews_sentiments <- reviews_sentiments %>%
+  select(title, sentiment, reviews) %>%
+  # Filter out rows with NA in the review_text column
+  filter(!is.na(reviews))
+
+# View the first few rows of the data frame
+head(reviews_sentiments)
+
+
+```
+## Distribution of positive and negative Sentiments
+The bar graph to shows the distribution of sentiments across reviews for audiobooks. Here's an analysis based on the interpretation of the graph:
+
+**Positive Sentiments:** The graph shows a large number of positive sentiments, indicated by the tall blue bar. This suggests that the majority of the reviews are positive, indicating a favorable reception from the reviewers.
+
+**Negative Sentiments:** There is a smaller red bar representing negative sentiments. The count of negative reviews is significantly lower than that of positive reviews, suggesting that there are some criticisms or negative experiences, but they are in the minority.
+
+**Neutral Sentiments:** The neutral category, depicted in grey, is not visible in the graph. This suggests that there are either no neutral reviews or their count is negligible compared to the positive and negative reviews.
+
+**Overall Impression:** The dominant number of positive reviews suggests that the sentiment towards the subject is overwhelmingly positive. The small number of negative reviews indicates that there may be a few areas for improvement, but they are not the general consensus.
+
+**Implications:** For the provider of the products or services being reviewed, this distribution would generally be considered very good news. It may also suggest customer satisfaction and could potentially be used in marketing or product development to further enhance positive aspects or address the negative feedback.
+
+```{r syuzhet sentiment analysis}
+# Load the necessary libraries
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(syuzhet)
+
+reviews_sentiments <- reviews_sentiments %>%
+  mutate(sentiment_category = case_when(
+    sentiment > 0 ~ "Positive",
+    sentiment < 0 ~ "Negative",
+    TRUE ~ "Neutral"
+  ))
+
+# Plot the distribution of sentiment categories
+ggplot(reviews_sentiments, aes(x = sentiment_category, fill = sentiment_category)) +
+  geom_bar() +
+  scale_fill_manual(values = c("Positive" = "blue", "Negative" = "red", "Neutral" = "grey")) +
+  labs(title = "Sentiment Category Distribution",
+       x = "Sentiment Category",
+       y = "Count") +
+  theme_minimal()
+
+
+```
+
+## Distribution of Sentiments
+
+The below histogram depicts the distribution of sentiment scores for audiobook reviews. Here's an analysis of the graph:
+
+**Range of Sentiment Scores:** The sentiment scores range from approximately -40 to 120, indicating a wide spread of opinions.
+
+**Skewness:** The distribution of sentiment scores appears to be slightly right-skewed, meaning there are more reviews with positive sentiment than negative. This can be seen from the taller bars on the right-hand side of the histogram.
+
+**Most Common Sentiment Scores:** The highest frequency of reviews seems to be in the range of slightly positive sentiment scores (around 20 to 40). There are also notable frequencies in the range of higher positive sentiment scores (around 60 to 80), though not as high as the 20 to 40 range.
+
+**Negative Sentiments:** There are fewer reviews with negative sentiment scores. The bars on the negative side are shorter, indicating a smaller number of reviews with negative sentiments.
+
+**Neutral Sentiments:** There's a moderate number of reviews with scores around 0, which might indicate neutral sentiments or a balance of positive and negative sentiments within the reviews.
+
+**Overall Impression:** The general sentiment towards the audiobooks seems to be positive, with a significant number of reviews having positive sentiment scores. There are fewer neutral and negative reviews.
+
+```{r syuzhet sentiment analysis plot}
+# Load the necessary libraries
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(syuzhet)
+
+
+reviews_sentiments <- reviews_sentiments %>%
+  mutate(sentiment_category = case_when(
+    sentiment > 0 ~ "Positive",
+    sentiment < 0 ~ "Negative",
+    TRUE ~ "Neutral"
+  ))
+
+
+# plot the sentiment scores using a histogram
+ggplot(reviews_sentiments, aes(x = sentiment)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Sentiment Scores",
+       x = "Sentiment Score",
+       y = "Frequency") +
+  theme_minimal()
+
+
+```
+
+
+
+```{r sentimentr sentiment analysis}
+library(sentimentr)
+library(dplyr)
+library(readr)
+library(jsonlite)
+
+# Read the CSV file into a DataFrame
+reviews_sentiments <- read_csv("C:/Users/RemoteUser/spider_tutorial/spider_tutorial/audible.csv", show_col_types = FALSE)
+
+# Assuming the column with review text is named 'review_text'
+# Replace 'review_text' with the actual name of your column that contains the review text
+# Filter out rows where 'review_text' is NA
+reviews_sentiments <- reviews_sentiments %>%
+  filter(!is.na(reviews))
+reviews_sentiments
+# Calculate the mean sentiment for each review
+reviews_sentiments <- reviews_sentiments %>%
+  rowwise() %>%
+  mutate(
+    # Calculate sentiment scores for non-NA review texts
+    sentiment_score = mean(sentiment(get_sentences(reviews))$sentiment)
+  ) %>%
+  ungroup() 
+
+# Create a sentiment decision column based on sentiment_score
+reviews_sentiments <- reviews_sentiments %>%
+  mutate(
+    sentiment_decision = case_when(
+      sentiment_score > 0  ~ "positive",
+      sentiment_score < 0  ~ "negative",
+      TRUE ~ "neutral"
+    )
+  )
+
+# Select the necessary columns
+reviews_sentiments <- reviews_sentiments %>%
+  select(title, sentiment_score, sentiment_decision, reviews)
+
+# Print the dataframe to view
+print(reviews_sentiments)
+
+
+
+```
+
+```{r sentimentr sentiment analysis plot}
+library(ggplot2)
+library(readr)
+
+# Plot the distribution of sentiment
+ggplot(reviews_sentiments, aes(x = sentiment_decision)) +
+  geom_bar(aes(fill = sentiment_decision)) +
+  theme_minimal() +
+  labs(title = "Sentiment Distribution",
+       x = "Sentiment",
+       y = "Count") +
+  scale_fill_manual(values = c("positive" = "blue", "negative" = "red", "not rated" = "green", "neutral" = "grey"))
+
+# Assuming that your sentiment analysis results are in a column called 'sentiment_decision'
+
+```
+
+# Conclusion
+
+Our comprehensive analysis of the audiobook dataset on audible.com has unveiled significant insights into user behavior and preferences. The histogram of audiobook lengths revealed a strong user preference for audiobooks around 9 hours in duration, while the density plot of ratings indicated a skew towards high ratings, suggesting both high-quality content and user inclination towards favorable reviews. The distribution of the number of ratings demonstrated that while most audiobooks received fewer ratings, a select few garnered a substantial volume of reviews, highlighting the concentration of popularity among specific titles. Additionally, our examination of the relationship between audiobook length and ratings revealed a minor negative correlation, indicating that audiobook length has only a marginal impact on user ratings. In the realm of authors and narrators, our findings showcased clear hierarchies, with top authors and narrators attracting a significantly higher number of ratings, indicative of dedicated fan bases and their influence on the market. Finally, our analysis of monthly user ratings from September to December 2023 indicated dynamic trends, with variations in average ratings and user engagement over time. These combined insights underscore the multifaceted nature of the audiobook market, emphasizing the importance of content quality, author and narrator popularity, and user engagement in shaping the industry's landscape.
+
+
+
+* * *
