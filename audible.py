@@ -1,272 +1,213 @@
-from selenium import webdriver
-from selenium.common import TimeoutException, NoSuchElementException, StaleElementReferenceException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-import time
-import json
-import csv
+import scrapy
 import pandas as pd
+from scrapy import signals
+from scrapy.signalmanager import dispatcher
+import sqlite3
 
-from selenium.webdriver.support.wait import WebDriverWait
+class AudibleSpider(scrapy.Spider):
+    name = "audible"
+    allowed_domains = ["www.audible.com"]
 
+    start_urls = ["https://www.audible.com/search"]
 
-def find_elements_safely_within_book(book, by, value):
-    try:
-        # Wait for the elements to be present and stable within the book context
-        elements = WebDriverWait(book, 10).until(
-            EC.presence_of_all_elements_located((by, value))
-        )
-        return elements
-    except StaleElementReferenceException:
-        # If the elements become stale, find them again within the book context
-        return WebDriverWait(book, 10).until(
-            EC.presence_of_all_elements_located((by, value))
-        )
+    custom_settings = {
+        'FEEDS': {
+            'audible.csv': {
+                'format': 'csv',
+                'overwrite': True
+            },
+            'audible.json': {
+                'format': 'json',
+                'overwrite': True,
+                'indent': 4
+            },
+        }
+    }
 
-
-def find_element_safely_within_book(book, by, value):
-    try:
-        # Wait for the element to be present and stable within the book context
-        return WebDriverWait(book, 10).until(
-            EC.presence_of_element_located((by, value))
-        )
-    except StaleElementReferenceException:
-        # If the element becomes stale, find it again within the book context
-        return WebDriverWait(book, 10).until(
-            EC.presence_of_element_located((by, value))
-        )
-
-
-class AudibleScraper:
+    # Initialize a list to store the review data
     def __init__(self):
-        # Specify the path to ChromeDriver
-        chrome_options = webdriver.ChromeOptions()
-        chrome_options.add_experimental_option('detach', True)
-        path = r'C:\Users\RemoteUser\Downloads\chromedriver-win64\chromedriver.exe'
-        self.driver = webdriver.Chrome(options=chrome_options)
-        self.url = "https://www.audible.com/search"
+        self.reviews_data = []
+        dispatcher.connect(self.spider_closed, signals.spider_closed)
 
-        # list to store basic book data
-        self.data = []
-        # list to store detailed book data including reviews
-        self.detailed_data = []
-        self.book_urls = []
+    def start_requests(self):
+        for url in self.start_urls:
+            yield scrapy.Request(
+                url=url,
+                callback=self.parse,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.46'
+                }
+            )
 
-    def scrape(self):
-        self.driver.get(self.url)
-        time.sleep(2)  # Wait for the page to load
+    def parse(self, response):
+        books = response.xpath(
+            '(//div[@class="adbl-impression-container "])/div//li[contains(@class,"productListItem")]')
+        for book in books:
+            title = book.xpath('.//h3[contains(@class, "bc-heading")]/a/text()').get()
+            title_link = book.xpath('.//h3[contains(@class, "bc-heading")]/a/@href').get()
+            subtitle = book.xpath('.//li[contains(@class, "subtitle")]/span/text()').get()
+            authors = book.xpath('.//li[contains(@class, "authorLabel")]/span/a/text()').getall()
+            narrators = book.xpath('.//li[contains(@class, "narratorLabel")]/span/a/text()').getall()
+            series = book.xpath('.//li[contains(@class, "seriesLabel")]/span/a/text()').get()
+            length = book.xpath('.//li[contains(@class, "runtimeLabel")]/span/text()').get()
+            release_date = book.xpath('.//li[contains(@class, "releaseDateLabel")]/span/text()').get()
+            language = book.xpath('.//li[contains(@class, "languageLabel")]/span/text()').get()
+            rating = book.xpath(
+                './/li[contains(@class, "ratingsLabel")]/span[contains(@class, "bc-pub-offscreen")]/text()').get()
+            no_of_ratings = book.xpath(
+                './/li[contains(@class, "ratingsLabel")]/span[contains(@class, "bc-size-small")]/text()').get()
+            regular_price = book.xpath('.//p[contains(@id, "buybox-regular-price")]/span[2]/text()').get()
+            sales_price = book.xpath('.//p[contains(@id, "buybox-member-price")]/span[2]/text()').get()
 
-        while True:
-            books = self.driver.find_elements(By.CLASS_NAME, 'productListItem')
-            for book in books:
-                # Use CSS selectors or class names where possible
-                try:
-                    title_element = book.find_element(By.CSS_SELECTOR, 'h3.bc-heading a')
-                    title = title_element.text if title_element else None
-                except Exception as e:
-                    print(f"An error occurred: {e}")
+            if length:
+                length = length.split(':')[1].strip()
+            if release_date:
+                release_date = release_date.split('\n')[1].strip()
+            if language:
+                language = language.split('\n')[1].strip()
+            if regular_price:
+                regular_price = regular_price.split('\n')[1].strip()
 
-                try:
-                    title_link_element = book.find_element(By.CSS_SELECTOR, 'h3.bc-heading a')
-                    title_link = title_link_element.get_attribute('href') if title_link_element else None
-                    self.book_urls.append(title_link)
-                except Exception as e:
-                    print(f"An error occurred: {e}")
+            item = {
+                'title': title,
+                'subtitle': subtitle,
+                'authors': authors,
+                'narrators': narrators,
+                'series': series,
+                'length': length,
+                'release_date': release_date,
+                'language': language,
+                'rating': rating,
+                'no_of_ratings': no_of_ratings,
+                'regular_price': regular_price,
+                'sales_price': sales_price,
+                'title_link': title_link
+            }
 
-                # Initialize default values
-                try:
-                    subtitle_element = book.find_element(By.CSS_SELECTOR, 'li.subtitle span')
-                    subtitle = subtitle_element.text if subtitle_element else None
-                except Exception as e:
-                    print(f"Error occurred while fetching subtitle for book: {e}")
+            # To handle genres, yield a request to the book detail page if a title link is available
+            if title_link:
+                yield response.follow(
+                    url=title_link,
+                    callback=self.parse_title,
+                    meta={'item': item}  # Pass the current book item
+                )
+            else:
+                yield item  # If there's no title link, yield the item as it is
 
-                # try:
-                #     authors_elements = book.find_elements(By.CSS_SELECTOR, 'li.authorLabel span a')
-                #     authors = [author.text for author in narrators_elements] if authors_elements else None
-                # except Exception as e:
-                #     print(f"An error occurred: {e}")
+        pagination = response.xpath('//ul[contains(@class, "pagingElements")]')
+        next_button = pagination.xpath(
+            './/span[contains(@class, "nextButton") and not(contains(@class, "bc-button-disabled"))]/a/@href')
 
-                try:
-                    narrators_elements = book.find_elements(By.CSS_SELECTOR,
-                                                                          'li.narratorLabel span a')
-                    narrators = [narrator.text for narrator in narrators_elements] if narrators_elements else None
-                except Exception as e:
-                    print(f"An error occurred: {e}")
+        next_page_url = next_button.get()
 
-                try:
-                    series_element = book.find_element(By.CSS_SELECTOR, 'li.seriesLabel span a')
-                    series = series_element.text if series_element else None
-                except NoSuchElementException:
-                    regular_price = None  # Or handle as needed
+        if next_page_url:
+            yield response.follow(
+                next_page_url,
+                callback=self.parse,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.46'
+                }
+            )
+        else:
+            self.logger.info("Reached the last page or no 'Next' button found. Stopping the spider.")
 
-                try:
-                    length_element = book.find_element(By.CSS_SELECTOR, 'li.runtimeLabel span')
-                    length = length_element.text if length_element else None
-                except Exception as e:
-                    print(f"An error occurred: {e}")
+    def parse_title(self, response):
+        reviews_data = []
+        # Extract genres as before
+        genres = response.xpath('//div[contains(@class, "bc-expander")]//span[@class="bc-chip-text"]/text()').getall()
+        categories = response.xpath('//li[contains(@class, "categoriesLabel")]/a/text()').getall()
+        reviews_tabs = response.xpath('//div[contains(@class, "bc-tab-set")]')
 
-                try:
-                    release_date_element = book.find_element(By.CSS_SELECTOR,
-                                                                           'li.releaseDateLabel span')
-                    release_date = release_date_element.text if release_date_element else None
-                except Exception as e:
-                    print(f"An error occurred: {e}")
+        # Function to add reviews to the list if they exist
+        def add_reviews(review_list):
+            if review_list:  # Checks if the review list is not empty
+                reviews_data.extend([review.strip() for review in review_list])
 
-                try:
-                    language_element = book.find_element(By.CSS_SELECTOR, 'li.languageLabel span')
-                    language = language_element.text if language_element else None
-                except Exception as e:
-                    print(f"An error occurred: {e}")
+        # US reviews
+        usreviews = response.xpath(
+            '//div[contains(@class, "USreviews")]/h3[contains(@class, "bc-heading")]/following-sibling::p[contains(@class, "bc-size-body")]/text()').getall()
+        add_reviews(usreviews)
 
-                try:
-                    rating_element = book.find_element(By.CSS_SELECTOR,
-                                                                     'li.ratingsLabel .bc-pub-offscreen')
-                    rating = rating_element.text if rating_element else None
-                except Exception as e:
-                    print(f"An error occurred: {e}")
+        # UK reviews
+        ukreviews = response.xpath(
+            '//div[contains(@class, "UKreviews")]/h3[contains(@class, "bc-heading")]/following-sibling::p[contains(@class, "bc-size-body")]/text()').getall()
+        add_reviews(ukreviews)
 
-                try:
-                    no_of_ratings_element = book.find_element(By.CSS_SELECTOR,
-                                                                            'li.ratingsLabel .bc-size-small')
-                    no_of_ratings = no_of_ratings_element.text if no_of_ratings_element else None
-                except Exception as e:
-                    print("An error occurred: {e}")
+        # AU reviews
+        aureviews = response.xpath(
+            '//div[contains(@class, "AUreviews")]/h3[contains(@class, "bc-heading")]/following-sibling::p[contains(@class, "bc-size-body")]/text()').getall()
+        add_reviews(aureviews)
 
-                try:
-                    regular_price_element = book.find_element(By.CSS_SELECTOR,
-                                                                            'p.buybox-regular-price span:nth-child(2)')
-                    regular_price = regular_price_element.text if regular_price_element else None
+        # Amazon reviews
+        amazonreviews = response.xpath(
+            '//div[contains(@class, "review-text-content")]/span/text()').getall()
+        add_reviews(amazonreviews)
 
-                except NoSuchElementException:
-                    regular_price = None  # Or handle as needed
+        # If there are no reviews at all, you might want to add a placeholder or leave as an empty list
+        if not reviews_data:
+            reviews_data = ["no reviews"]  # Placeholder for no reviews
 
-                try:
-                    sales_price_element = book.find_element(By.CSS_SELECTOR,
-                                                                          'p.buybox-member-price span:nth-child(2)')
-                    sales_price = sales_price_element.text if sales_price_element else None
-                except NoSuchElementException:
-                    regular_price = None  # Or handle as needed
+        item = response.meta['item']
+        item['genres'] = [genre.strip() for genre in genres]  # Clean the genres
+        item['categories'] = [category.strip() for category in categories]  # Clean the categories
+        item['reviews'] = reviews_data  # Add the cleaned and consolidated reviews
 
-                self.data.append({
-                    'title': title,
-                    'subtitle': subtitle,
-                    # 'authors': authors,
-                    'narrators': narrators,
-                    # 'series': series,
-                    'length': length,
-                    'release_date': release_date,
-                    'language': language,
-                    'rating': rating,
-                    'no_of_ratings': no_of_ratings,
-                    'regular_price': regular_price,
-                    'sales_price': sales_price,
-                    'url': title_link
-                })
-                print(self.data)
-            try:
-                next_button = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, 'nextButton'))
+        # Extract the Amazon URL from the book details page
+        amazon_url = response.xpath('//a[@data-hook="see-all-reviews-link-foot"]/@href').get()
+
+        # Check if an Amazon URL was found
+        if amazon_url:
+            # If found, follow the Amazon URL to scrape reviews
+            print(amazon_url)
+            yield response.follow(
+                url=amazon_url,
+                callback=self.parse_amazon_reviews,
+                meta={'item': item},  # Pass along the existing item
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.46'
+                }
+            )
+        else:
+            # If there's no Amazon URL, yield the item with the details scraped so far
+            yield item
+
+    def parse_amazon_reviews(self, response):
+        # Retrieve the item passed via meta
+        item = response.meta['item']
+
+        # Scrape the review texts
+        reviews = response.xpath(
+            '//div[contains(@class, "review-data")]/span[contains(@class, "review-text-content")]/span')
+        for review in reviews:
+            review_text = review.xpath('.//text()').get().strip()
+            print(f"Scraped review: {review_text}")  # Debugging line
+            review_item = {
+                'title_link': item['title_link'],
+                'review_text': review_text
+            }
+            self.reviews_data.append(review_item)
+            yield review_item
+
+            # Check for a 'Next' page link and follow if found
+            next_page_link = response.xpath('//ul[@class="a-pagination"]/li[@class="a-last"]/a/@href')
+            if next_page_link:
+                next_page_url = next_page_link.get()
+                yield response.follow(
+                    url=next_page_url,
+                    callback=self.parse_amazon_reviews,
+                    meta={'item': response.meta['item']},  # Pass along the meta information
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.46'
+                    }
                 )
 
-                # Check if the next button is enabled (not disabled on the last page)
-                if next_button.is_enabled():
-                    next_button.click()
-                    time.sleep(3)  # Wait for the next page to load
-                else:
-                    print("Reached the last page.")
-                    break
-            except TimeoutException:
-                print("Next button not found within the given time frame.")
-                break
-            except NoSuchElementException:
-                print("Next button not found on the page.")
-                break
+    # Method to be called when the spider is closed
+    def spider_closed(self, spider):
+        # Convert the list of reviews to a DataFrame
+        reviews_df = pd.DataFrame(self.reviews_data)
 
-            # After collecting all data, save it in separate files
-            # self.save_data(self.detailed_data, 'detailed_audible_data')
+        # Save to CSV
+        reviews_df.to_csv('amazon_reviews.csv', index=False)
 
-        # DataFrame to store data
-        book_data = []
-
-        # # Iterate through book detail pages
-        # for book_url in self.book_urls:
-        #     self.driver.get(book_url)
-        #
-        #     # Scrape reviews
-        #     # Click the Amazon reviews button
-        #     try:
-        #         amazon_button = self.driver.find_element(By.CLASS_NAME, 'globalReviewsTabs')
-        #         amazon_button.click()
-        #         time.sleep(2)
-        #     except Exception as e:
-        #         print("There are no Amazon reviews:", e)
-        #         break
-        #
-        #     reviews_elements = self.driver.find_elements(By.CSS_SELECTOR, 'div.reviewText span')
-        #     reviews = "|".join([review.text for review in reviews_elements])
-        #
-        #     # Update book_data with additional details
-        #     print(reviews)
-        #     book_data['reviews'] = reviews
-        #     self.detailed_data.append(book_data)
-
-        #     # Store data
-        #     for review, reviewer in zip(reviews, reviewers):
-        #         details_data.append({"URL": book_url, "Reviewer": reviewer, "Review": review})
-        #
-        # # Convert to DataFrame
-        # df = pd.DataFrame(details_data)
-        #
-        # # Save to CSV and JSON
-        # df.to_csv('audible_reviews.csv', index=False)
-        # df.to_json('audible_reviews.json', orient='records')
-
-        def handle_pagination(self):
-            try:
-                # Replace with the correct CSS selector for the 'Next' button
-                next_button_selector = 'ul.pagingElements > li > a.nextButton'
-
-                # Wait until the next button is clickable or timeout after 10 seconds
-                WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, next_button_selector))
-                )
-
-                next_button = self.driver.find_element(By.CSS_SELECTOR, next_button_selector)
-
-                if next_button:
-                    next_button.click()
-                    time.sleep(3)  # Wait for the next page to load
-                    self.parse_main_page()  # Parse the next page
-            except (NoSuchElementException, TimeoutException):
-                print("Reached the last page or the 'Next' button is not available.")
-
-        self.driver.quit()
-
-    def save_data(self):
-        # Save data to a CSV file
-        keys = self.data[0].keys()
-        with open('audible_data.csv', 'w', newline='', encoding='utf-8') as output_file:
-            dict_writer = csv.DictWriter(output_file, keys)
-            dict_writer.writeheader()
-            dict_writer.writerows(self.data)
-
-        # Save data to a JSON file
-        with open('audible_data.json', 'w', encoding='utf-8') as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=4)
-
-        # # Save data to a CSV file
-        # keys = self.detailed_data[0].keys()
-        # with open('audible_view.csv', 'w', newline='', encoding='utf-8') as output_file:
-        #     dict_writer = csv.DictWriter(output_file, keys)
-        #     dict_writer.writeheader()
-        #     dict_writer.writerows(self.detailed_data)
-        #
-        # # Save data to a JSON file
-        # with open(f'audible_view.json', 'w', encoding='utf-8') as f:
-        #     json.dump(self.detailed_data, f, ensure_ascii=False, indent=4)
-
-
-if __name__ == "__main__":
-    scraper = AudibleScraper()
-    scraper.scrape()
-    scraper.save_data()
+        # Save to JSON
+        reviews_df.to_json('amazon_reviews.json', orient='records', lines=True, indent=4)
